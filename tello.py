@@ -8,7 +8,9 @@ import copy
 import numpy as np
 import tkinter as tk
 from PIL import ImageTk, Image
+from ultralytics import YOLO
 import platform
+import pyautogui
 import time
 import contextlib
 with contextlib.redirect_stdout(None):
@@ -23,6 +25,8 @@ this.mon = False
 tello_ip = '192.168.10.1'
 tello_port = 8889
 tello_addr = (tello_ip, tello_port)
+
+model = YOLO('yolov8n.pt')
 
 def _send(command):
   """Sends a command to the drone.
@@ -245,13 +249,14 @@ class _VideoStream:
         if not self.started:
             send_and_wait("streamon")
             self.kill_event = threading.Event()
-            if platform.system() == "Darwin":
-                self.thread = threading.Thread(target=self._pygame_video_loop, args=[self.kill_event])
-                pygame.init()
-                self.screen = pygame.display.set_mode([640, 480])
-                pygame.display.set_caption("Video Stream")
-            else:
-                self.thread = threading.Thread(target=self._tkinter_video_loop, args=[self.kill_event])
+            # if platform.system() == "Darwin":
+            #     self.thread = threading.Thread(target=self._pygame_video_loop, args=[self.kill_event])
+            #     pygame.init()
+            #     self.screen = pygame.display.set_mode([640, 480])
+            #     pygame.display.set_caption("Video Stream")
+            # else:
+            #     self.thread = threading.Thread(target=self._tkinter_video_loop, args=[self.kill_event])
+            self.thread = threading.Thread(target=self._cv_show, args=[self.kill_event])
             self.thread.start()
             self.started = True
 
@@ -267,6 +272,7 @@ class _VideoStream:
             if ret == True:
                 self.frame = frame
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = self.draw_detections(frame)
                 img = Image.fromarray(frame)
                 img = ImageTk.PhotoImage(img)
                 if label is None:
@@ -278,7 +284,23 @@ class _VideoStream:
                     label.image = img
             root.update()
         root.destroy()
+    
 
+    def _cv_show(self, stop_event):
+        print('Starting Video Loop')
+        cap = cv2.VideoCapture("udp://0.0.0.0:11111", cv2.CAP_FFMPEG)
+        while not stop_event.is_set():
+            ret, frame = cap.read()
+            if ret == True:
+                self.frame = frame
+                # frame = self.draw_detections(frame)
+                cv2.imshow('Frame', frame)
+                key = cv2.waitKey(1)
+                if key == ord('q'):
+                    break
+        cap.release()
+    
+        
     def _pygame_video_loop(self, stop_event):
         cap = cv2.VideoCapture("udp://0.0.0.0:11111", cv2.CAP_FFMPEG)
         while not stop_event.is_set():
@@ -286,11 +308,43 @@ class _VideoStream:
             if ret == True:
                 self.frame = frame
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame = self.draw_detections(frame)
                 frame = np.rot90(frame)
                 frame = np.flip(frame, 0)
                 frame = pygame.surfarray.make_surface(frame)
                 self.screen.blit(frame, (0,0))
                 pygame.display.update()
+    
+    # def show_preds_image(image_path):
+    #     image = cv2.imread(image_path)
+    #     outputs = model.predict(source=image_path)
+    #     results = outputs[0].cpu().numpy()
+    #     for i, det in enumerate(results.boxes.xyxy):
+    #         cv2.rectangle(
+    #             image,
+    #             (int(det[0]), int(det[1])),
+    #             (int(det[2]), int(det[3])),
+    #             color=(0, 0, 255),
+    #             thickness=2,
+    #             lineType=cv2.LINE_AA
+    #         )
+    #     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+
+    def draw_detections(self, img):
+        results = model.predict(img)
+        results = results[0].cpu().numpy()
+        for i, det in enumerate(results.boxes.xyxy):
+            cv2.rectangle(
+                img,
+                (int(det[0]), int(det[1])),
+                (int(det[2]), int(det[3])),
+                color=(0, 0, 255),
+                thickness=2,
+                lineType=cv2.LINE_AA
+            )
+        # cv2.putText(img, 'Text Here', (20, 60), cv2.FONT_HERSHEY_COMPLEX, 1, (0,255,0), 1)
+        return img        
 
 
     def stop(self):
